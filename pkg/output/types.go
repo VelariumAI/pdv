@@ -94,9 +94,9 @@ type ProgressEvent struct {
 
 // WorkerStatus represents the current state of a worker goroutine.
 type WorkerStatus struct {
-	ID        int            `json:"id"`
-	State     string         `json:"state"` // "idle" | "downloading" | "paused"
-	CurrentID int64          `json:"current_id,omitempty"`
-	StartedAt *time.Time     `json:"started_at,omitempty"`
-	Current   *QueueEntry    `json:"current,omitempty"`
+	ID        int         `json:"id"`
+	State     string      `json:"state"` // "idle" | "downloading" | "paused"
+	CurrentID int64       `json:"current_id,omitempty"`
+	StartedAt *time.Time  `json:"started_at,omitempty"`
+	Current   *QueueEntry `json:"current,omitempty"`
 }

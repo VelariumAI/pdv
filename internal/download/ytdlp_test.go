@@ -2,227 +2,138 @@ package download
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/velariumai/pdv/pkg/output"
 )
 
-func TestProbe(t *testing.T) {
-	// Note: These tests require yt-dlp to be installed.
-	// For isolated unit testing, Tranche 2+ could add testable interfaces.
-	// For now, we verify the function signature and error handling.
-
-	tests := []struct {
-		name    string
-		url     string
-		wantErr bool
-	}{
-		{
-			name:    "empty url error",
-			url:     "",
-			wantErr: true,
-		},
+func TestProbeParsesDumpJSON(t *testing.T) {
+	withFakeYTDLP(t, `#!/bin/sh
+if [ "$1" = "--dump-json" ]; then
+  echo '{"title":"Test","uploader":"U","duration":42,"upload_date":"20260101","thumbnail":"http://x","formats":[{"format_id":"18","ext":"mp4","width":1280,"height":720,"vcodec":"h264","filesize":1000}],"subtitles":{"en":[]}}'
+  exit 0
+fi
+echo "unexpected args" >&2
+exit 1
+`)
+	got, err := Probe(context.Background(), "https://example.com")
+	if err != nil {
+		t.Fatalf("Probe() error = %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			_, err := Probe(ctx, tt.url)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Probe() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+	if got.Title != "Test" || got.Duration != 42 {
+		t.Fatalf("Probe() parsed wrong result: %#v", got)
+	}
+	if len(got.Formats) != 1 || got.Formats[0].FormatID != "18" {
+		t.Fatalf("Probe() formats mismatch: %#v", got.Formats)
+	}
+	if len(got.Subtitles) != 1 || got.Subtitles[0] != "en" {
+		t.Fatalf("Probe() subtitles mismatch: %#v", got.Subtitles)
 	}
 }
 
-func TestParseProbeJSON(t *testing.T) {
-	tests := []struct {
-		name string
-		data map[string]interface{}
-		want *output.ProbeResult
-	}{
-		{
-			name: "empty data",
-			data: map[string]interface{}{},
-			want: &output.ProbeResult{
-				Formats:   []output.Format{},
-				Subtitles: []string{},
-			},
-		},
-		{
-			name: "basic metadata",
-			data: map[string]interface{}{
-				"title":    "Test Video",
-				"duration": 120.5,
-				"uploader": "Test User",
-			},
-			want: &output.ProbeResult{
-				Title:     "Test Video",
-				Duration:  120,
-				Uploader:  "Test User",
-				Formats:   []output.Format{},
-				Subtitles: []string{},
-			},
-		},
-		{
-			name: "with formats",
-			data: map[string]interface{}{
-				"title": "Video",
-				"formats": []interface{}{
-					map[string]interface{}{
-						"format_id": "best",
-						"ext":       "mp4",
-						"height":    1080.0,
-						"width":     1920.0,
-					},
-				},
-			},
-			want: &output.ProbeResult{
-				Title: "Video",
-				Formats: []output.Format{
-					{
-						FormatID:   "best",
-						Ext:        "mp4",
-						Resolution: "1920x1080",
-					},
-				},
-				Subtitles: []string{},
-			},
-		},
-		{
-			name: "with subtitles",
-			data: map[string]interface{}{
-				"title": "Translated Video",
-				"subtitles": map[string]interface{}{
-					"en": []interface{}{},
-					"es": []interface{}{},
-					"fr": []interface{}{},
-				},
-			},
-			want: &output.ProbeResult{
-				Title:     "Translated Video",
-				Formats:   []output.Format{},
-				Subtitles: []string{"en", "es", "fr"},
-			},
-		},
+func TestProbeErrors(t *testing.T) {
+	if _, err := Probe(context.Background(), ""); err == nil {
+		t.Fatal("Probe(empty url) error = nil, want non-nil")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseProbeJSON(tt.data)
-
-			if got.Title != tt.want.Title {
-				t.Errorf("Title = %q, want %q", got.Title, tt.want.Title)
-			}
-			if got.Duration != tt.want.Duration {
-				t.Errorf("Duration = %d, want %d", got.Duration, tt.want.Duration)
-			}
-			if got.Uploader != tt.want.Uploader {
-				t.Errorf("Uploader = %q, want %q", got.Uploader, tt.want.Uploader)
-			}
-			if len(got.Formats) != len(tt.want.Formats) {
-				t.Errorf("Formats count = %d, want %d", len(got.Formats), len(tt.want.Formats))
-			}
-			if len(got.Subtitles) != len(tt.want.Subtitles) {
-				t.Errorf("Subtitles count = %d, want %d", len(got.Subtitles), len(tt.want.Subtitles))
-			}
-		})
+	withFakeYTDLP(t, `#!/bin/sh
+echo "failure" >&2
+exit 2
+`)
+	if _, err := Probe(context.Background(), "https://example.com"); err == nil {
+		t.Fatal("Probe(non-zero exit) error = nil, want non-nil")
+	}
+	withFakeYTDLP(t, `#!/bin/sh
+echo "not-json"
+exit 0
+`)
+	if _, err := Probe(context.Background(), "https://example.com"); err == nil {
+		t.Fatal("Probe(invalid json) error = nil, want non-nil")
 	}
 }
 
-func TestParseFormat(t *testing.T) {
-	tests := []struct {
-		name string
-		fmap map[string]interface{}
-		want output.Format
-	}{
-		{
-			name: "complete format",
-			fmap: map[string]interface{}{
-				"format_id": "best",
-				"ext":       "mp4",
-				"height":    720.0,
-				"width":     1280.0,
-				"vcodec":    "h264",
-				"filesize":  104857600.0,
-			},
-			want: output.Format{
-				FormatID:         "best",
-				Ext:              "mp4",
-				Resolution:       "1280x720",
-				Codec:            "h264",
-				FileSizeEstimate: 104857600,
-			},
-		},
-		{
-			name: "audio format",
-			fmap: map[string]interface{}{
-				"format_id": "best",
-				"ext":       "m4a",
-				"acodec":    "aac",
-				"filesize":  5242880.0,
-			},
-			want: output.Format{
-				FormatID:         "best",
-				Ext:              "m4a",
-				Codec:            "aac",
-				FileSizeEstimate: 5242880,
-			},
-		},
-		{
-			name: "minimal format",
-			fmap: map[string]interface{}{
-				"format_id": "basic",
-				"ext":       "webm",
-			},
-			want: output.Format{
-				FormatID: "basic",
-				Ext:      "webm",
-			},
-		},
+func TestDownloadWithProgress(t *testing.T) {
+	withFakeYTDLP(t, `#!/bin/sh
+echo "pdv-progress:100|1000|1000|1MiB/s|10|10.0%"
+echo "pdv-progress:1000|1000|1000|2MiB/s|0|100.0%"
+exit 0
+`)
+	entry := &output.QueueEntry{ID: 7, URL: "https://example.com/video"}
+	var events []output.ProgressEvent
+	err := DownloadWithProgress(context.Background(), entry, &DownloadOpts{Template: "%(title)s.%(ext)s"}, func(e output.ProgressEvent) {
+		events = append(events, e)
+	})
+	if err != nil {
+		t.Fatalf("DownloadWithProgress() error = %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseFormat(tt.fmap)
-
-			if got.FormatID != tt.want.FormatID {
-				t.Errorf("FormatID = %q, want %q", got.FormatID, tt.want.FormatID)
-			}
-			if got.Ext != tt.want.Ext {
-				t.Errorf("Ext = %q, want %q", got.Ext, tt.want.Ext)
-			}
-			if got.Resolution != tt.want.Resolution {
-				t.Errorf("Resolution = %q, want %q", got.Resolution, tt.want.Resolution)
-			}
-			if got.Codec != tt.want.Codec {
-				t.Errorf("Codec = %q, want %q", got.Codec, tt.want.Codec)
-			}
-			if got.FileSizeEstimate != tt.want.FileSizeEstimate {
-				t.Errorf("FileSizeEstimate = %d, want %d", got.FileSizeEstimate, tt.want.FileSizeEstimate)
-			}
-		})
+	if len(events) != 2 {
+		t.Fatalf("progress events = %d, want 2", len(events))
+	}
+	if events[1].Percentage < 99 {
+		t.Fatalf("final percentage = %.2f, want near 100", events[1].Percentage)
 	}
 }
 
-func TestDownloadOpts(t *testing.T) {
-	// Verify DownloadOpts struct fields are accessible
-	opts := &DownloadOpts{
-		Quality:   "best",
-		Format:    "best[ext=mp4]",
+func TestDownloadErrors(t *testing.T) {
+	if err := Download(context.Background(), nil, nil); err == nil {
+		t.Fatal("Download(nil entry) error = nil, want non-nil")
+	}
+	if err := Download(context.Background(), &output.QueueEntry{}, nil); err == nil {
+		t.Fatal("Download(empty URL) error = nil, want non-nil")
+	}
+	withFakeYTDLP(t, `#!/bin/sh
+echo "nope" >&2
+exit 4
+`)
+	err := Download(context.Background(), &output.QueueEntry{ID: 1, URL: "https://example.com"}, &DownloadOpts{})
+	if err == nil {
+		t.Fatal("Download(non-zero exit) error = nil, want non-nil")
+	}
+}
+
+func TestBuildDownloadArgsAndParseProgress(t *testing.T) {
+	args := buildDownloadArgs("https://example.com", &DownloadOpts{
+		Format:    "18",
 		Template:  "%(title)s.%(ext)s",
-		Cookies:   "/path/to/cookies",
-		Proxy:     "http://proxy:8080",
-		UserAgent: "Custom/1.0",
+		Cookies:   "/tmp/cookies.txt",
+		Proxy:     "http://127.0.0.1:8080",
+		UserAgent: "pdv-test",
+	})
+	joined := strings.Join(args, " ")
+	for _, part := range []string{"-f 18", "-o %(title)s.%(ext)s", "--cookies /tmp/cookies.txt", "--proxy http://127.0.0.1:8080", "--user-agent pdv-test"} {
+		if !strings.Contains(joined, part) {
+			t.Fatalf("args missing %q: %s", part, joined)
+		}
 	}
+	ev, ok := parseProgressLine("pdv-progress:500|1000|1000|1MiB/s|3|50.0%", 42)
+	if !ok || ev.ID != 42 || ev.Percentage != 50 {
+		t.Fatalf("parseProgressLine mismatch: ok=%v ev=%#v", ok, ev)
+	}
+	if _, ok := parseProgressLine("random", 1); ok {
+		t.Fatal("parseProgressLine(random) ok = true, want false")
+	}
+}
 
-	if opts.Quality != "best" {
-		t.Errorf("Quality = %q, want %q", opts.Quality, "best")
+func TestCleanup(t *testing.T) {
+	if err := Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
 	}
-	if opts.Format != "best[ext=mp4]" {
-		t.Errorf("Format = %q, want %q", opts.Format, "best[ext=mp4]")
+}
+
+func withFakeYTDLP(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yt-dlp")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake yt-dlp: %v", err)
 	}
-	if opts.Template != "%(title)s.%(ext)s" {
-		t.Errorf("Template = %q, want %q", opts.Template, "%(title)s.%(ext)s")
+	orig := os.Getenv("PATH")
+	if err := os.Setenv("PATH", dir+":"+orig); err != nil {
+		t.Fatalf("set PATH: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", orig)
+	})
 }
