@@ -12,6 +12,7 @@
 *.pprof
 *.cover
 coverage.out
+coverage_*.out
 coverage.html
 
 # Runtime data
