@@ -3,6 +3,7 @@ package download
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -11,6 +12,10 @@ import (
 	"github.com/velariumai/pdv/pkg/output"
 )
 
+type runDownloadFunc func(context.Context, *output.QueueEntry, *DownloadOpts, func(output.ProgressEvent)) error
+
+var runDownload = DownloadWithProgress
+
 // Engine orchestrates download workers, job distribution, and event publishing.
 type Engine struct {
 	cfg *config.Config
@@ -18,132 +23,124 @@ type Engine struct {
 	workerCount int
 	jobChan     chan *output.QueueEntry
 
-	// Event dispatcher: event type -> list of subscriber channels
 	eventsMu sync.RWMutex
 	events   map[string][]chan interface{}
 
-	// Worker state tracking
 	stateMu      sync.RWMutex
 	workerStates map[int]*workerState
 
-	// Lifecycle control
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
+
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
-// workerState tracks internal state of a worker goroutine.
 type workerState struct {
 	id        int
-	state     string    // "idle" | "downloading"
-	currentID int64     // queue entry ID being processed
+	state     string
+	currentID int64
 	startedAt time.Time
 }
 
 // NewEngine creates a new Engine with the given configuration.
-// Worker count defaults to MaxConcurrentQueue from config.
 func NewEngine(cfg *config.Config) *Engine {
 	if cfg == nil {
 		cfg = config.New()
 	}
-
 	workerCount := cfg.MaxConcurrentQueue
 	if workerCount <= 0 {
 		workerCount = 2
 	}
-
 	return &Engine{
-		cfg:           cfg,
-		workerCount:   workerCount,
-		jobChan:       make(chan *output.QueueEntry, workerCount*2),
-		events:        make(map[string][]chan interface{}),
-		workerStates:  make(map[int]*workerState),
+		cfg:          cfg,
+		workerCount:  workerCount,
+		jobChan:      make(chan *output.QueueEntry, workerCount*2),
+		events:       make(map[string][]chan interface{}),
+		workerStates: make(map[int]*workerState, workerCount),
 	}
 }
 
 // Start spawns worker goroutines and initializes the engine.
-// Workers will be ready to consume jobs immediately.
 func (e *Engine) Start(ctx context.Context) error {
-	if e.ctx != nil {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.started && !e.stopped {
 		return fmt.Errorf("download: engine already started")
 	}
-
+	if e.started && e.stopped {
+		return fmt.Errorf("download: engine cannot be restarted")
+	}
 	e.ctx, e.cancel = context.WithCancel(ctx)
-
-	// Initialize worker states
-	e.stateMu.Lock()
+	e.started = true
+	e.stopped = false
 	for i := 0; i < e.workerCount; i++ {
 		e.workerStates[i] = &workerState{id: i, state: "idle"}
-	}
-	e.stateMu.Unlock()
-
-	// Spawn worker goroutines
-	for i := 0; i < e.workerCount; i++ {
 		e.wg.Add(1)
 		go e.workerLoop(i)
-
-		// Publish WorkerStarted event
 		e.publish("WorkerStarted", &events.WorkerStarted{
 			ID:        i,
 			Timestamp: time.Now().UTC(),
 		})
 	}
-
 	return nil
 }
 
-// Stop gracefully shuts down the engine and all workers.
-// Closes job channel, drains in-flight jobs, cancels context, and waits for workers.
-// Returns error if shutdown exceeds timeout.
+// Stop gracefully shuts down all workers and waits until completion or timeout.
 func (e *Engine) Stop(ctx context.Context) error {
-	if e.ctx == nil {
+	e.lifecycleMu.Lock()
+	if !e.started {
+		e.lifecycleMu.Unlock()
 		return fmt.Errorf("download: engine not started")
 	}
+	if e.stopped {
+		e.lifecycleMu.Unlock()
+		return nil
+	}
+	e.stopped = true
+	e.lifecycleMu.Unlock()
 
-	// Close job channel to signal workers to drain
-	close(e.jobChan)
+	e.stopOnce.Do(func() {
+		close(e.jobChan)
+		e.cancel()
+	})
 
-	// Cancel worker context to interrupt subprocesses
-	e.cancel()
-
-	// Wait for all workers with timeout
 	done := make(chan struct{})
 	go func() {
 		e.wg.Wait()
 		close(done)
 	}()
-
 	select {
 	case <-done:
-		// All workers stopped
+		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("download: engine shutdown timeout")
+		return fmt.Errorf("download: engine shutdown timeout: %w", ctx.Err())
 	}
-
-	// Publish WorkerStopped events for each worker
-	e.stateMu.RLock()
-	for i := range e.workerStates {
-		e.publish("WorkerStopped", &events.WorkerStopped{
-			ID:        i,
-			Timestamp: time.Now().UTC(),
-		})
-	}
-	e.stateMu.RUnlock()
-
-	return nil
 }
 
-// Submit adds a single job to the worker queue.
-// Returns error if job channel is full or closed.
+// Submit adds one job to the queue.
 func (e *Engine) Submit(job *output.QueueEntry) error {
 	if job == nil {
 		return fmt.Errorf("download: job is nil")
 	}
-
+	e.lifecycleMu.Lock()
+	started := e.started
+	stopped := e.stopped
+	ctx := e.ctx
+	e.lifecycleMu.Unlock()
+	if !started {
+		return fmt.Errorf("download: engine not started")
+	}
+	if stopped {
+		return fmt.Errorf("download: engine stopped")
+	}
 	select {
 	case e.jobChan <- job:
 		return nil
-	case <-e.ctx.Done():
+	case <-ctx.Done():
 		return fmt.Errorf("download: engine stopped")
 	default:
 		return fmt.Errorf("download: job queue full")
@@ -151,7 +148,6 @@ func (e *Engine) Submit(job *output.QueueEntry) error {
 }
 
 // SubmitBatch adds multiple jobs to the queue.
-// Returns first error encountered, or nil if all succeed.
 func (e *Engine) SubmitBatch(jobs []*output.QueueEntry) error {
 	for _, job := range jobs {
 		if err := e.Submit(job); err != nil {
@@ -161,114 +157,138 @@ func (e *Engine) SubmitBatch(jobs []*output.QueueEntry) error {
 	return nil
 }
 
-// Workers returns a snapshot of current worker statuses.
+// Workers returns a deterministic snapshot of current worker status.
 func (e *Engine) Workers() []output.WorkerStatus {
 	e.stateMu.RLock()
 	defer e.stateMu.RUnlock()
-
-	result := make([]output.WorkerStatus, 0, len(e.workerStates))
-	for _, ws := range e.workerStates {
-		status := output.WorkerStatus{
-			ID:    ws.id,
-			State: ws.state,
-		}
+	ids := make([]int, 0, len(e.workerStates))
+	for id := range e.workerStates {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	result := make([]output.WorkerStatus, 0, len(ids))
+	for _, id := range ids {
+		ws := e.workerStates[id]
+		s := output.WorkerStatus{ID: ws.id, State: ws.state}
 		if ws.currentID != 0 {
-			status.CurrentID = ws.currentID
-			if ws.startedAt != (time.Time{}) {
-				status.StartedAt = &ws.startedAt
+			s.CurrentID = ws.currentID
+			if !ws.startedAt.IsZero() {
+				startedAt := ws.startedAt
+				s.StartedAt = &startedAt
 			}
 		}
-		result = append(result, status)
+		result = append(result, s)
 	}
 	return result
 }
 
-// workerLoop runs in a dedicated goroutine per worker.
-// Consumes jobs from jobChan, executes them, and publishes events.
 func (e *Engine) workerLoop(id int) {
 	defer e.wg.Done()
-
-	for job := range e.jobChan {
-		// Update state: mark as downloading
-		e.stateMu.Lock()
-		ws := e.workerStates[id]
-		ws.state = "downloading"
-		ws.currentID = job.ID
-		ws.startedAt = time.Now().UTC()
-		e.stateMu.Unlock()
-
-		// Publish DownloadStarted event
-		e.publish("DownloadStarted", &events.DownloadStarted{
-			ID:        job.ID,
-			Timestamp: time.Now().UTC(),
-			URL:       job.URL,
-			Title:     job.Title,
-		})
-
-		// Execute download
-		// For now, this is a placeholder that logs success.
-		// Tranche 3 will wire this to the database layer.
-		// Tranche 2 focus: verify the engine and event plumbing work.
-
-		// Simulate download completion (will be replaced in Tranche 3)
-		time.Sleep(100 * time.Millisecond)
-
-		// Publish DownloadCompleted event
-		e.publish("DownloadCompleted", &events.DownloadCompleted{
-			ID:        job.ID,
-			Timestamp: time.Now().UTC(),
-			URL:       job.URL,
-			Title:     job.Title,
-			FilePath:  "/downloads/" + job.Title,
-			FileSize:  1024,
-		})
-
-		// Update state: mark as idle
-		e.stateMu.Lock()
-		ws.state = "idle"
-		ws.currentID = 0
-		ws.startedAt = time.Time{}
-		e.stateMu.Unlock()
+	defer e.publish("WorkerStopped", &events.WorkerStopped{
+		ID:        id,
+		Timestamp: time.Now().UTC(),
+	})
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case job, ok := <-e.jobChan:
+			if !ok {
+				return
+			}
+			e.handleJob(id, job)
+		}
 	}
 }
 
-// publish sends an event to all registered subscribers for that event type.
-// Non-blocking: if a subscriber's channel is full, the event is dropped
-// (subscriber should use buffered channels or goroutine to prevent blocking).
+func (e *Engine) handleJob(workerID int, job *output.QueueEntry) {
+	startedAt := time.Now().UTC()
+	e.setWorkerState(workerID, "downloading", job.ID, startedAt)
+	e.publish("DownloadStarted", &events.DownloadStarted{
+		ID:        job.ID,
+		Timestamp: startedAt,
+		URL:       job.URL,
+		Title:     job.Title,
+	})
+
+	opts := &DownloadOpts{
+		Quality:   e.cfg.DefaultQuality,
+		Format:    "",
+		Template:  e.cfg.OutputTemplate,
+		Cookies:   e.cfg.CookieFile,
+		Proxy:     e.cfg.Proxy,
+		UserAgent: e.cfg.UserAgent,
+	}
+	err := runDownload(e.ctx, job, opts, func(ev output.ProgressEvent) {
+		e.publish("DownloadProgress", &events.DownloadProgress{
+			ID:         ev.ID,
+			Timestamp:  time.Now().UTC(),
+			Percentage: ev.Percentage,
+			Speed:      ev.Speed,
+			ETA:        ev.ETA,
+		})
+	})
+	if err != nil {
+		e.publish("DownloadFailed", &events.DownloadFailed{
+			ID:        job.ID,
+			Timestamp: time.Now().UTC(),
+			URL:       job.URL,
+			Error:     err.Error(),
+		})
+		e.setWorkerState(workerID, "idle", 0, time.Time{})
+		return
+	}
+
+	e.publish("DownloadCompleted", &events.DownloadCompleted{
+		ID:        job.ID,
+		Timestamp: time.Now().UTC(),
+		URL:       job.URL,
+		Title:     job.Title,
+		FilePath:  BuildOutputPath(opts.Template, job.Title, "mp4", ""),
+		FileSize:  0,
+	})
+	e.setWorkerState(workerID, "idle", 0, time.Time{})
+}
+
+func (e *Engine) setWorkerState(id int, state string, currentID int64, startedAt time.Time) {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	ws := e.workerStates[id]
+	if ws == nil {
+		ws = &workerState{id: id}
+		e.workerStates[id] = ws
+	}
+	ws.state = state
+	ws.currentID = currentID
+	ws.startedAt = startedAt
+}
+
 func (e *Engine) publish(eventType string, event interface{}) {
 	e.eventsMu.RLock()
 	subscribers := e.events[eventType]
 	e.eventsMu.RUnlock()
-
 	for _, ch := range subscribers {
 		select {
 		case ch <- event:
 		default:
-			// Subscriber channel full; drop event to avoid blocking
 		}
 	}
 }
 
-// Subscribe registers a channel to receive events of the given type.
-// Returns a function to unsubscribe.
+// Subscribe registers a channel for events and returns an unsubscribe callback.
 func (e *Engine) Subscribe(eventType string, ch chan interface{}) func() {
 	e.eventsMu.Lock()
-	if e.events[eventType] == nil {
-		e.events[eventType] = make([]chan interface{}, 0)
-	}
 	e.events[eventType] = append(e.events[eventType], ch)
 	e.eventsMu.Unlock()
-
 	return func() {
 		e.eventsMu.Lock()
-		subscribers := e.events[eventType]
-		for i, sub := range subscribers {
+		defer e.eventsMu.Unlock()
+		subs := e.events[eventType]
+		for i, sub := range subs {
 			if sub == ch {
-				// Remove by swapping with last and truncating
-				e.events[eventType] = append(subscribers[:i], subscribers[i+1:]...)
-				break
+				e.events[eventType] = append(subs[:i], subs[i+1:]...)
+				return
 			}
 		}
-		e.eventsMu.Unlock()
 	}
 }
