@@ -1,0 +1,63 @@
+# Binaries
+/pdv
+/pdv.exe
+/bin/
+/build/
+/dist/
+/out/
+
+# Go build and test artifacts
+*.test
+*.prof
+*.pprof
+*.cover
+coverage.out
+coverage.html
+
+# Runtime data
+*.log
+*.log.*
+*.pid
+*.pid.lock
+*.seed
+*.tmp
+*.bak
+
+# Local application state
+pdv.json
+pdv.db
+pdv.sqlite
+pdv.sqlite3
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Download/output directories
+/downloads/
+/videos/
+/audio/
+/images/
+/tmp/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Dependency caches
+.cache/
+.tmp/

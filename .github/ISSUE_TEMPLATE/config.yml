@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/velariumai/pdv/tree/main/docs
+    about: Review the architecture, governance, and roadmap documents before opening an issue.
