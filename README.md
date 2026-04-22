@@ -2,6 +2,13 @@
 
 PDV is a self-hosted download manager with a persistent queue, retry/backoff worker engine, REST API, and CLI.
 
+## Project Links
+
+- Source: `https://github.com/velariumai/pdv`
+- Issues (bugs/enhancements): `https://github.com/velariumai/pdv/issues`
+- Security policy: [SECURITY.md](SECURITY.md)
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+
 ## Quick Start
 
 ```bash
@@ -114,6 +121,12 @@ When `api_token` is set, mutating API routes (`POST/PUT/DELETE`) require either:
 - `./build.sh` emits the local Termux ARM64 artifact to `dist/`.
 - `FULL_MATRIX=1 ./build.sh` attempts the full cross-platform matrix.
 - `pdv --version` prints version/build date (supports `-ldflags` injection via `build.sh`).
+
+## Versioning and Releases
+
+- PDV uses SemVer (`MAJOR.MINOR.PATCH`).
+- Git tags use the `v` prefix (for example, `v0.1.1`).
+- User-facing changes are summarized in [CHANGELOG.md](CHANGELOG.md).
 
 ## Platform Notes
 

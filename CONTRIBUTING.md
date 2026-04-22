@@ -17,3 +17,18 @@ All contributions must satisfy the documented quality gates, verification requir
 - Update documentation in the same pull request when behavior, workflow, or repository conventions change.
 - Use the pull request template and complete the verification section honestly.
 - Do not present partial scope as complete.
+- Use issues + pull requests on GitHub for all normal change proposals.
+
+## Acceptance Requirements
+
+All contributions are expected to:
+
+1. Build and pass tests locally (`make check` and `make test-web` for user-facing changes).
+2. Include or update automated tests when adding major functionality or changing behavior.
+3. Maintain formatting and static checks (`gofmt`, `go vet`, CI checks).
+4. Update documentation/help text for any user-facing change.
+
+## Bug Reports and Enhancements
+
+- Report bugs in GitHub Issues with reproduction details.
+- Propose enhancements in GitHub Issues before large implementation work.

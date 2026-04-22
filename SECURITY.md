@@ -8,7 +8,10 @@ PDV is in active early development. Security fixes will be applied on the `main`
 
 Please do not open public GitHub issues for suspected vulnerabilities.
 
-Until a dedicated security contact is published, report vulnerabilities privately through the repository maintainers or the official Velarium AI contact channel.
+Report vulnerabilities privately using one of these channels:
+
+1. GitHub Private Vulnerability Reporting / security advisory draft for this repository.
+2. Direct private contact with repository maintainers when private advisory reporting is unavailable.
 
 When reporting, include:
 
@@ -17,4 +20,13 @@ When reporting, include:
 - Potential impact
 - Any suggested remediation
 
-We will acknowledge receipt, investigate, and coordinate remediation before public disclosure when appropriate.
+## Response Expectations
+
+- Initial acknowledgment target: within 72 hours.
+- Initial triage and next-step response target: within 14 days.
+- Critical issues are prioritized for immediate handling.
+
+## Disclosure Process
+
+- We coordinate remediation privately first when appropriate.
+- Once a fix is available (or mitigations are prepared), we publish details through repository release notes and/or security advisories.
