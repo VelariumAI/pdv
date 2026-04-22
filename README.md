@@ -1,34 +1,130 @@
 # PDV
 
-PDV is a Go rewrite of Personal Data Vault: a self-hosted download manager with a queue, REST API, CLI, and terminal UI.
+PDV is a self-hosted download manager with a persistent queue, retry/backoff worker engine, REST API, and CLI.
 
-The repository is currently in project setup and implementation-planning stage. The codebase skeleton exists, and the governing documents define the production standards required for all future implementation work.
+## Quick Start
 
-The intended public repository home is `github.com/velariumai/pdv`.
+```bash
+go build -o pdv ./cmd/pdv
+./pdv --help
+./pdv add "https://example.com/video"
+./pdv list
+./pdv history 20
+./pdv serve --api-host 0.0.0.0 --api-port 8787
+```
 
-## Repository Layout
+## Web GUI
 
-- `cmd/` — entrypoints
-- `internal/` — application packages
-- `pkg/` — shared public data types
-- `docs/` — architecture, governance, plans, and roadmap documents
+- GUI assets live in `web/` (`web/index.html`, logos, favicon).
+- `pdv serve` automatically serves the GUI at `/` when `index.html` is present in `./web` (or the config directory as fallback).
+- The GUI API base defaults to same-origin (`<server>/api/v1`) and falls back to `http://localhost:8787/api/v1` when opened from a non-HTTP origin.
 
-## Core Docs
+## CLI Commands
+
+- `pdv add <url> [--quality --format --template --category --playlist]`
+- `pdv probe <url>`
+- `pdv list [--status]`
+- `pdv pause <id>` / `pdv resume <id>` / `pdv retry <id>` / `pdv cancel <id>`
+- `pdv history [limit] [--status]`
+- `pdv status`
+- `pdv serve [--api-host --api-port]`
+- `pdv get [key] [--all]`
+- `pdv set <key> <value>`
+- `pdv config validate`
+- `pdv --version`
+
+## REST API
+
+Base path: `/api/v1`
+
+- Queue
+- `GET /queue`
+- `POST /queue`
+- `GET /queue/:id`
+- `DELETE /queue/:id`
+- `POST /queue/:id/pause`
+- `POST /queue/:id/resume`
+- `POST /queue/:id/retry`
+- `POST /queue/pause`
+- `POST /queue/resume`
+- `DELETE /queue`
+- History
+- `GET /history`
+- `GET /history/:id`
+- `DELETE /history/:id`
+- `DELETE /history`
+- Config
+- `GET /config`
+- `PUT /config`
+- `GET /config/:key`
+- `PUT /config/:key`
+- `GET /config/export`
+- `POST /config/import`
+- System
+- `POST /probe`
+- `GET /status`
+- `GET /health`
+- `GET /ready`
+- `GET /logs`
+- `POST /shutdown`
+
+All responses use:
+
+```json
+{"success": true, "data": {}, "error": ""}
+```
+
+## Configuration
+
+Common keys:
+
+- `max_concurrent_queue`
+- `download_dir`
+- `output_template`
+- `output_template_playlist`
+- `default_quality`
+- `auto_categorize`
+- `api_host`
+- `api_port`
+- `retries`
+- `api_token` (optional; protects mutating API endpoints)
+- `cors_allowed_origins` (comma-separated allowlist; set `*` explicitly to allow all)
+
+Default `download_dir` is system-aware:
+- Linux/macOS: `~/Downloads`
+- Windows: `%USERPROFILE%/Downloads`
+- Termux/Android: shared download folder (`/storage/emulated/0/Download`) with safe fallbacks
+
+Use:
+
+```bash
+./pdv get --all
+./pdv set retries 5
+```
+
+When `api_token` is set, mutating API routes (`POST/PUT/DELETE`) require either:
+
+- `Authorization: Bearer <token>`
+- `X-API-Token: <token>`
+
+## Build and Verification
+
+- `make check` runs formatting, vet, tests, and coverage gates.
+- `make test-web` runs a smoke test against `pdv serve` (`GET /` + `GET /api/v1/status`).
+- `./build.sh` emits the local Termux ARM64 artifact to `dist/`.
+- `FULL_MATRIX=1 ./build.sh` attempts the full cross-platform matrix.
+- `pdv --version` prints version/build date (supports `-ldflags` injection via `build.sh`).
+
+## Platform Notes
+
+- Termux ARM64 is supported (`pdv-termux-arm64` artifact).
+- Linux/macOS/Windows builds are produced by `build.sh`.
+
+## Project Docs
 
 - [docs/README.md](docs/README.md)
-- [Architecture Design](docs/architecture/go-rewrite-design.md)
-- [Agent Directives](docs/governance/agent-directives.md)
-- [Agent Assignment Prompt](docs/governance/agent-assignment-prompt.md)
-- [Implementation Plan](docs/plans/go-rewrite-implementation-plan.md)
-- [Tranches](docs/roadmap/tranches.md)
-
-## Standards
-
-Implementation work in this repository is governed by the documents under `docs/`. Production-ready delivery, full-scope ownership, and explicit verification are mandatory.
-
-## Repository Operations
-
-- `make help` shows the available repository tasks
-- `make repo-check` validates repo structure and required documentation
-- `make check` runs repository checks and Go checks when `go.mod` exists
-- GitHub Actions enforces repository hygiene immediately and Go quality gates once the module is created
+- [docs/architecture/go-rewrite-design.md](docs/architecture/go-rewrite-design.md)
+- [docs/governance/agent-directives.md](docs/governance/agent-directives.md)
+- [docs/roadmap/tranches.md](docs/roadmap/tranches.md)
+- [docs/release/checklist.md](docs/release/checklist.md)
+- [docs/release/branch-protection.md](docs/release/branch-protection.md)

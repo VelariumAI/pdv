@@ -2,10 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -34,6 +38,8 @@ type Config struct {
 	Proxy                  string `json:"proxy"`
 	UserAgent              string `json:"user_agent"`
 	GeoBypass              bool   `json:"geo_bypass"`
+	APIToken               string `json:"api_token"`
+	CORSAllowedOrigins     string `json:"cors_allowed_origins"`
 }
 
 // New returns a Config with project default values.
@@ -41,7 +47,7 @@ func New() *Config {
 	return &Config{
 		MaxConcurrentQueue:     4,
 		MaxConcurrentNow:       2,
-		DownloadDir:            "./downloads",
+		DownloadDir:            defaultDownloadDir(),
 		OutputTemplate:         "%(title)s.%(ext)s",
 		OutputTemplatePlaylist: "%(playlist)s/%(playlist_index)s - %(title)s.%(ext)s",
 		DefaultQuality:         "best",
@@ -59,7 +65,90 @@ func New() *Config {
 		Proxy:                  "",
 		UserAgent:              "",
 		GeoBypass:              true,
+		APIToken:               "",
+		CORSAllowedOrigins:     "http://localhost,http://127.0.0.1,http://localhost:8787,http://127.0.0.1:8787",
 	}
+}
+
+func defaultDownloadDir() string {
+	return defaultDownloadDirFor(runtime.GOOS, os.Getenv, os.UserHomeDir, os.Stat)
+}
+
+func defaultDownloadDirFor(
+	goos string,
+	getenv func(string) string,
+	userHomeDir func() (string, error),
+	stat func(string) (os.FileInfo, error),
+) string {
+	candidates := make([]string, 0, 4)
+	addCandidate := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == path {
+				return
+			}
+		}
+		candidates = append(candidates, path)
+	}
+
+	addHomeDownloads := func() {
+		home, err := userHomeDir()
+		if err != nil {
+			return
+		}
+		home = strings.TrimSpace(home)
+		if home == "" {
+			return
+		}
+		addCandidate(filepath.Join(home, "Downloads"))
+	}
+
+	addAndroidCandidates := func() {
+		addCandidate("/storage/emulated/0/Download")
+		home, err := userHomeDir()
+		if err != nil {
+			return
+		}
+		home = strings.TrimSpace(home)
+		if home == "" {
+			return
+		}
+		addCandidate(filepath.Join(home, "storage", "downloads"))
+		addCandidate(filepath.Join(home, "Downloads"))
+	}
+
+	switch goos {
+	case "windows":
+		if profile := strings.TrimSpace(getenv("USERPROFILE")); profile != "" {
+			addCandidate(filepath.Join(profile, "Downloads"))
+		}
+		addHomeDownloads()
+	case "android":
+		addAndroidCandidates()
+	default:
+		if goos == "linux" && isTermuxEnv(getenv) {
+			addAndroidCandidates()
+		} else {
+			addHomeDownloads()
+		}
+	}
+
+	for _, path := range candidates {
+		if info, err := stat(path); err == nil && info.IsDir() {
+			return path
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return "./downloads"
+}
+
+func isTermuxEnv(getenv func(string) string) bool {
+	return strings.Contains(getenv("PREFIX"), "com.termux") || strings.TrimSpace(getenv("TERMUX_VERSION")) != ""
 }
 
 // Load reads configuration from path and merges it over defaults.
@@ -112,7 +201,17 @@ func (c *Config) Get(key string) (string, bool) {
 // Set updates key with value and persists to the loaded config path.
 func (c *Config) Set(key, value string) error {
 	c.mu.Lock()
+	prev, ok := c.getLocked(key)
+	if !ok {
+		c.mu.Unlock()
+		return fmt.Errorf("config: set key %q: unknown key", key)
+	}
 	if err := c.setLocked(key, value); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if err := c.validateLocked(); err != nil {
+		_ = c.setLocked(key, prev)
 		c.mu.Unlock()
 		return err
 	}
@@ -125,6 +224,13 @@ func (c *Config) Set(key, value string) error {
 		return fmt.Errorf("config: set key %q: %w", key, err)
 	}
 	return nil
+}
+
+// Validate checks whether config values satisfy runtime constraints.
+func (c *Config) Validate() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.validateLocked()
 }
 
 func (c *Config) getLocked(key string) (string, bool) {
@@ -169,6 +275,10 @@ func (c *Config) getLocked(key string) (string, bool) {
 		return c.UserAgent, true
 	case "geo_bypass":
 		return strconv.FormatBool(c.GeoBypass), true
+	case "api_token":
+		return c.APIToken, true
+	case "cors_allowed_origins":
+		return c.CORSAllowedOrigins, true
 	default:
 		return "", false
 	}
@@ -258,8 +368,100 @@ func (c *Config) setLocked(key, value string) error {
 			return err
 		}
 		c.GeoBypass = v
+	case "api_token":
+		c.APIToken = value
+	case "cors_allowed_origins":
+		c.CORSAllowedOrigins = value
 	default:
 		return fmt.Errorf("config: set key %q: unknown key", key)
+	}
+	return nil
+}
+
+func (c *Config) validateLocked() error {
+	var errs []error
+	add := func(field, msg string) {
+		errs = append(errs, fmt.Errorf("config: %s: %s", field, msg))
+	}
+
+	if c.MaxConcurrentQueue < 1 || c.MaxConcurrentQueue > 128 {
+		add("max_concurrent_queue", "must be between 1 and 128")
+	}
+	if c.MaxConcurrentNow < 1 {
+		add("max_concurrent_now", "must be at least 1")
+	}
+	if c.MaxConcurrentQueue >= 1 && c.MaxConcurrentNow > c.MaxConcurrentQueue {
+		add("max_concurrent_now", "must be less than or equal to max_concurrent_queue")
+	}
+	if strings.TrimSpace(c.DownloadDir) == "" {
+		add("download_dir", "must not be empty")
+	}
+	if strings.TrimSpace(c.DefaultQuality) == "" {
+		add("default_quality", "must not be empty")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
+	case "debug", "info", "warn", "error":
+	default:
+		add("log_level", "must be one of: debug, info, warn, error")
+	}
+	if c.APIPort < 1 || c.APIPort > 65535 {
+		add("api_port", "must be between 1 and 65535")
+	}
+	if strings.TrimSpace(c.APIHost) == "" {
+		add("api_host", "must not be empty")
+	}
+	if c.Retries < 0 || c.Retries > 100 {
+		add("retries", "must be between 0 and 100")
+	}
+	if c.TrimFilenames < 0 || c.TrimFilenames > 512 {
+		add("trim_filenames", "must be between 0 and 512")
+	}
+	if strings.ContainsAny(c.APIToken, " \t\r\n") {
+		add("api_token", "must not contain whitespace")
+	}
+	if c.APIToken != "" && len(c.APIToken) < 8 {
+		add("api_token", "must be at least 8 characters when set")
+	}
+	if err := validateCORSAllowedOrigins(c.CORSAllowedOrigins); err != nil {
+		add("cors_allowed_origins", err.Error())
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
+func validateCORSAllowedOrigins(v string) error {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return fmt.Errorf("must not be empty")
+	}
+	parts := strings.Split(raw, ",")
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			return fmt.Errorf("contains empty origin entry")
+		}
+		if origin == "*" {
+			continue
+		}
+		if strings.ContainsAny(origin, " \t\r\n") {
+			return fmt.Errorf("origin %q contains whitespace", origin)
+		}
+		u, err := url.Parse(origin)
+		if err != nil || !u.IsAbs() {
+			return fmt.Errorf("origin %q must be an absolute http(s) origin", origin)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("origin %q must use http or https", origin)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("origin %q must include host", origin)
+		}
+		if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("origin %q must not include path/query/fragment", origin)
+		}
 	}
 	return nil
 }

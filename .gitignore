@@ -1,6 +1,7 @@
 # Binaries
 /pdv
 /pdv.exe
+/build
 /bin/
 /build/
 /dist/
@@ -25,6 +26,7 @@ coverage.html
 *.bak
 
 # Local application state
+.claude/
 pdv.json
 pdv.db
 pdv.sqlite
@@ -43,10 +45,23 @@ pdv.sqlite3
 /images/
 /tmp/
 
+# Local media/scratch files at repo root
+/*.webm
+/*.mp4
+/*.m4v
+/*.mkv
+/*.mov
+/*.mp3
+/*.m4a
+/*.part
+/*.aria2
+/changes.md
+
 # Environment and secrets
 .env
 .env.*
 !.env.example
+.envrc
 
 # Editor and IDE files
 .idea/
