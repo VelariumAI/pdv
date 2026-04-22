@@ -63,6 +63,23 @@ pdv.sqlite3
 .env.*
 !.env.example
 .envrc
+.direnv/
+*.local
+*.secret
+*.secrets
+secrets/
+private/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.kdbx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
 
 # Editor and IDE files
 .idea/
