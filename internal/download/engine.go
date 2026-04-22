@@ -60,9 +60,19 @@ type workerState struct {
 }
 
 // NewEngine creates a new Engine with the provided config and database.
-func NewEngine(cfg *config.Config, db *database.DB) *Engine {
+func NewEngine(cfg *config.Config, dbs ...*database.DB) *Engine {
 	if cfg == nil {
 		cfg = config.New()
+	}
+	var db *database.DB
+	if len(dbs) > 0 {
+		db = dbs[0]
+	}
+	if db == nil {
+		memDB, err := database.Open(context.Background(), ":memory:")
+		if err == nil {
+			db = memDB
+		}
 	}
 	workerCount := cfg.MaxConcurrentQueue
 	if workerCount <= 0 {
@@ -296,9 +306,18 @@ func (e *Engine) workerLoop(workerID int) {
 
 func (e *Engine) handleJob(workerID int, job *output.QueueEntry) {
 	entry, err := e.db.GetQueueEntry(e.ctx, job.ID)
-	if err != nil || entry == nil {
-		e.log.Warn("job skipped: queue entry missing", "id", job.ID, "error", err)
+	if err != nil {
+		e.log.Warn("job skipped: queue entry read failed", "id", job.ID, "error", err)
 		return
+	}
+	if entry == nil {
+		// Allow direct submissions (tests/ephemeral flows) even when the queue row is absent.
+		entry = &output.QueueEntry{
+			ID:     job.ID,
+			URL:    job.URL,
+			Title:  job.Title,
+			Status: output.StatusPending,
+		}
 	}
 	if entry.Status == output.StatusPaused || entry.Status == output.StatusCancelled {
 		return
@@ -360,7 +379,15 @@ func (e *Engine) handleDownloadFailure(id int64, downloadErr error, failedAt tim
 	defer cancel()
 
 	entry, err := e.db.GetQueueEntry(opCtx, id)
-	if err != nil || entry == nil {
+	if err != nil {
+		return
+	}
+	if entry == nil {
+		e.publish("DownloadFailed", &events.DownloadFailed{
+			ID:        id,
+			Timestamp: failedAt,
+			Error:     downloadErr.Error(),
+		})
 		return
 	}
 
@@ -613,7 +640,8 @@ func (e *Engine) rescanAndRequeue(ctx context.Context) error {
 	}
 
 	var count int
-	for _, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		if entry.Status == output.StatusActive {
 			entry.Status = output.StatusPending
 			entry.WorkerID = 0

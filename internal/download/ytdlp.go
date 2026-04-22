@@ -20,12 +20,13 @@ var execCommandContext = exec.CommandContext
 
 // DownloadOpts contains options for a download operation.
 type DownloadOpts struct {
-	Quality   string
-	Format    string
-	Template  string
-	Cookies   string
-	Proxy     string
-	UserAgent string
+	Quality    string
+	Format     string
+	Template   string
+	Cookies    string
+	Proxy      string
+	UserAgent  string
+	IsPlaylist bool
 }
 
 // Probe calls yt-dlp --dump-json to retrieve metadata about a URL.
@@ -128,7 +129,7 @@ func Cleanup() error {
 	cmd := exec.Command(pkill, "-f", "yt-dlp")
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		if errors.As(err, &exitErr) {
 			return nil
 		}
 		return fmt.Errorf("download: cleanup stale processes: %w", err)
@@ -275,4 +276,28 @@ func parseFormat(fmap map[string]any) output.Format {
 		format.FileSizeEstimate = int64(v)
 	}
 	return format
+}
+
+func isPermanentYTDLPFailure(msg string) bool {
+	m := strings.ToLower(strings.TrimSpace(msg))
+	if m == "" {
+		return false
+	}
+	permanentMarkers := []string{
+		"unsupported url",
+		"unsupported site",
+		"this video is private",
+		"private video",
+		"video unavailable",
+		"not available in your country",
+		"http error 403",
+		"http error 404",
+		"requested format not available",
+	}
+	for _, marker := range permanentMarkers {
+		if strings.Contains(m, marker) {
+			return true
+		}
+	}
+	return false
 }

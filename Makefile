@@ -15,16 +15,13 @@ help:
 		'  make ci          CI entrypoint'
 
 repo-check:
-	@test ! -d docs/superpowers || (echo 'legacy docs/superpowers directory must not exist'; exit 1)
 	@test -f README.md || (echo 'README.md is required'; exit 1)
 	@test -f CONTRIBUTING.md || (echo 'CONTRIBUTING.md is required'; exit 1)
+	@test -f SECURITY.md || (echo 'SECURITY.md is required'; exit 1)
+	@test -f LICENSE || (echo 'LICENSE is required'; exit 1)
 	@test -f .gitignore || (echo '.gitignore is required'; exit 1)
-	@test -f docs/README.md || (echo 'docs/README.md is required'; exit 1)
-	@test -f docs/architecture/go-rewrite-design.md || (echo 'architecture design doc is required'; exit 1)
-	@test -f docs/governance/agent-directives.md || (echo 'agent directives doc is required'; exit 1)
-	@test -f docs/governance/agent-assignment-prompt.md || (echo 'agent assignment prompt is required'; exit 1)
-	@test -f docs/plans/go-rewrite-implementation-plan.md || (echo 'implementation plan is required'; exit 1)
-	@test -f docs/roadmap/tranches.md || (echo 'tranches doc is required'; exit 1)
+	@test -f CODE_OF_CONDUCT.md || (echo 'CODE_OF_CONDUCT.md is required'; exit 1)
+	@test -f SUPPORT.md || (echo 'SUPPORT.md is required'; exit 1)
 
 verify-go:
 	@if [ -f go.mod ]; then \

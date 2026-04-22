@@ -100,3 +100,12 @@ type WorkerStatus struct {
 	StartedAt *time.Time  `json:"started_at,omitempty"`
 	Current   *QueueEntry `json:"current,omitempty"`
 }
+
+// AddOpts controls how a URL is queued/downloaded.
+type AddOpts struct {
+	Quality    string `json:"quality,omitempty"`
+	Format     string `json:"format,omitempty"`
+	Template   string `json:"template,omitempty"`
+	Category   string `json:"category,omitempty"`
+	IsPlaylist bool   `json:"is_playlist,omitempty"`
+}
