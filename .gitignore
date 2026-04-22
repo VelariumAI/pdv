@@ -27,6 +27,7 @@ coverage.html
 
 # Local application state
 .claude/
+/docs/
 pdv.json
 pdv.db
 pdv.sqlite
