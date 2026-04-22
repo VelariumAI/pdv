@@ -1,6 +1,11 @@
 # PDV
 
+[![CI](https://github.com/velariumai/pdv/actions/workflows/ci.yml/badge.svg)](https://github.com/velariumai/pdv/actions/workflows/ci.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/0/badge)](https://www.bestpractices.dev/projects/0)
+
 PDV is a self-hosted download manager with a persistent queue, retry/backoff worker engine, REST API, and CLI.
+
+Note: OpenSSF badge link currently uses a placeholder project id (`0`) until the PDV badge entry is created.
 
 ## Project Links
 
