@@ -29,8 +29,7 @@ go build -o pdv ./cmd/pdv
 
 ## Web GUI
 
-- GUI assets live in `web/` (`web/index.html`, logos, favicon).
-- `pdv serve` automatically serves the GUI at `/` when `index.html` is present in `./web` (or the config directory as fallback).
+- `pdv serve` can serve a web GUI at `/` when `index.html` assets are provided.
 - The GUI API base defaults to same-origin (`<server>/api/v1`) and falls back to `http://localhost:8787/api/v1` when opened from a non-HTTP origin.
 
 ## CLI Commands
@@ -124,10 +123,7 @@ When `api_token` is set, mutating API routes (`POST/PUT/DELETE`) require either:
 ## Build and Verification
 
 - `make check` runs formatting, vet, tests, and coverage gates.
-- `make test-web` runs a smoke test against `pdv serve` (`GET /` + `GET /api/v1/status`).
-- `./build.sh` emits the local Termux ARM64 artifact to `dist/`.
-- `FULL_MATRIX=1 ./build.sh` attempts the full cross-platform matrix.
-- `pdv --version` prints version/build date (supports `-ldflags` injection via `build.sh`).
+- `pdv --version` prints version/build date.
 
 ## Versioning and Releases
 
@@ -137,14 +133,5 @@ When `api_token` is set, mutating API routes (`POST/PUT/DELETE`) require either:
 
 ## Platform Notes
 
-- Termux ARM64 is supported (`pdv-termux-arm64` artifact).
-- Linux/macOS/Windows builds are produced by `build.sh`.
-
-## Project Docs
-
-- [docs/README.md](docs/README.md)
-- [docs/architecture/go-rewrite-design.md](docs/architecture/go-rewrite-design.md)
-- [docs/governance/agent-directives.md](docs/governance/agent-directives.md)
-- [docs/roadmap/tranches.md](docs/roadmap/tranches.md)
-- [docs/release/checklist.md](docs/release/checklist.md)
-- [docs/release/branch-protection.md](docs/release/branch-protection.md)
+- Termux ARM64 is supported.
+- Linux/macOS/Windows are supported.
